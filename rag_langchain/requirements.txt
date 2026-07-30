@@ -1,0 +1,26 @@
+# Base RAG
+langchain==1.3.13
+langchain-community==0.4.2
+langchain-ollama==1.1.0
+langchain-core
+
+# Vectorstore (remplace faiss-cpu)
+langchain-chroma
+chromadb
+
+# Extraction PDF amelioree (remplace pypdf)
+pymupdf
+
+# Documents Word
+unstructured
+python-docx
+
+# Reranking (cross-encoder)
+sentence-transformers
+
+# Interface web
+streamlit
+
+# Configuration
+pydantic-settings
+python-dotenv

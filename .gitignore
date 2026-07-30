@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Data (structure preserved via .gitkeep, content ignored)
+data/documents/*
+!data/documents/.gitkeep
+data/sqlite/*
+!data/sqlite/.gitkeep
+data/chroma_db/*
+!data/chroma_db/.gitkeep
+
+# Secrets / local config
+.env
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Streamlit
+.streamlit/secrets.toml

@@ -1,0 +1,274 @@
+import re
+import streamlit as st
+
+from rag_langchain.core.ingestion import index_files, get_vectorstore, get_embeddings
+from rag_langchain.core.rag_chain import (
+    condense_question, retrieve_and_rerank, generate_answer_stream,
+    classify_question, answer_from_history_stream,
+)
+from rag_langchain.core.command_parser import parse_user_input
+from rag_langchain.config import settings
+
+UPLOAD_DIR = settings.documents_dir
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+language = "fr"
+
+st.set_page_config(page_title="RAG interactif", layout="centered")
+st.title(" RAG interactif")
+st.caption("Upload de documents · Reformulation · Reranking · Multi-BD (SQLite, PG, Mongo)")
+
+@st.cache_resource
+def load_vectorstore():
+    embeddings = get_embeddings()
+    return get_vectorstore(embeddings)
+
+vectorstore = load_vectorstore()
+
+try:
+    chunk_count = vectorstore._collection.count()
+except Exception:
+    chunk_count = "?"
+
+# ------------------------------------------------------------------
+# Sidebar : upload et indexation
+# ------------------------------------------------------------------
+with st.sidebar:
+    st.header("📁 Documents")
+    uploaded_files = st.file_uploader(
+        "Ajoute tes documents (PDF, TXT, DOCX, PPTX)",
+        type=["pdf", "txt", "docx", "pptx", "ppt"],
+        accept_multiple_files=True,
+    )
+
+    if uploaded_files and st.button("Indexer les documents"):
+        saved_paths = []
+        for uf in uploaded_files:
+            dest = UPLOAD_DIR / uf.name
+            with open(dest, "wb") as f:
+                f.write(uf.getbuffer())
+            saved_paths.append(dest)
+
+        status = st.empty()
+        log_lines = []
+
+        def progress(msg):
+            log_lines.append(msg)
+            status.text("\n".join(log_lines))
+
+        try:
+            with st.spinner("Indexation en cours..."):
+                total = index_files(saved_paths, progress_callback=progress, vectorstore=vectorstore)
+            st.success(f"✅ {total} chunks indexés.")
+            try:
+                chunk_count = vectorstore._collection.count()
+            except Exception:
+                chunk_count = "?"
+        except Exception as e:
+            st.error(f"❌ Erreur pendant l'indexation : {e}")
+
+    if chunk_count == 0:
+        st.warning("⚠️ Aucun chunk indexé pour l'instant.")
+    else:
+        st.info(f"✅ {chunk_count} chunk(s) actuellement indexé(s).")
+
+    st.divider()
+    
+    # On définit 'existing' AVANT de l'utiliser dans le multiselect
+    existing = list(UPLOAD_DIR.glob("*"))
+    st.caption(f"📄 {len(existing)} document(s) déjà indexé(s) au total")
+    for f in existing:
+        st.caption(f"• {f.name}")
+        
+    st.divider()
+    st.header("🎯 Mode de recherche")
+    mode_options = {
+        "Auto (RAG)": "auto",
+        "📄 Documents (RAG)": "docs",
+        "🗄️ Employés (SQLite)": "sqlite",
+        "🛒 Achats (Postgres)": "postgres",
+        "🛠️ Services (Mongo)": "mongo",
+        "🔗 Jointure multi-BD (Federated)": "federated"
+    }
+    selected_mode = st.selectbox(
+        "Choisis la source de données :",
+        list(mode_options.keys()),
+        index=0
+    )
+
+    st.divider()
+    st.header("Filtrer la recherche")
+    selected_docs = st.multiselect(
+        "Chercher uniquement dans (vide = tous) :",
+        options=sorted(f.name for f in existing),
+    )
+    # On définit 'source_filter' AVANT de l'utiliser dans le code
+    source_filter = selected_docs if selected_docs else None
+
+
+# ------------------------------------------------------------------
+# État de la conversation
+# ------------------------------------------------------------------
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+if "history_pairs" not in st.session_state:
+    st.session_state.history_pairs = []
+
+for role, text in st.session_state.messages:
+    with st.chat_message(role):
+        st.markdown(text)
+
+# --- Aide à la saisie : palette de commandes ---
+with st.container():
+    st.caption("💡 Préfixes : `/employees` `/purchases` `/services` `/docs` `/all` · "
+               "Références : `@employé:DUPONT` `@service:RH` `@doc:rapport.pdf`")
+    user_input = st.chat_input("Pose ta question… (ou tape / pour voir les commandes)")
+
+if user_input:
+    parsed = parse_user_input(user_input)
+    
+    # Si l'utilisateur n'a pas tapé de / mais a choisi un mode dans la sidebar
+    if parsed.command == "auto" and selected_mode != "auto":
+        parsed.command = mode_options[selected_mode]
+        
+    question = parsed.cleaned_question
+    # ... la suite du code reste exactement la même
+    st.session_state.messages.append(("user", question))
+    with st.chat_message("user"):
+        st.markdown(question)
+
+    with st.chat_message("assistant"):
+        history = st.session_state.history_pairs
+        full_response = "" # Initialisation pour éviter les NameError à la fin
+        sources = []
+
+        # ==========================================================
+        # BRANCHE 1 : COMMANDE FEDERATED (/all)
+        # ==========================================================
+        if parsed.command == "federated":
+            st.caption("🔗 Réponse multi-sources (fédération)")
+            with st.spinner("Planification et exécution des requêtes…"):
+                from rag_langchain.connectors.federator import Federator
+                fed = Federator(
+                    sqlite_path=str(settings.sqlite_path),
+                    pg_dsn=settings.pg_dsn,
+                    mongo_uri=settings.mongo_uri,
+                    mongo_db=settings.mongo_db
+                )
+                full_response, db_sources, plan = fed.answer(question, parsed.references, language)
+
+            st.markdown(full_response)
+            with st.expander("🧭 Plan d'exécution"):
+                st.json(plan)
+            with st.expander("🗄️ Sources base de données"):
+                for r in db_sources:
+                    st.caption(f"[{r.source_label}]")
+                    st.code(r.native_query, language="json" if "Mongo" in r.source_label else "sql")
+                    if r.rows:
+                        st.dataframe(r.rows)
+
+                # ==========================================================
+        # BRANCHE 2 : COMMANDE SPECIFIQUE (/sql, /sqlite, /postgres, /mongo)
+        # ==========================================================
+        elif parsed.command in ["sqlite", "postgres", "mongo", "database"]:
+            mode_label = "SQL (SQLite)" if parsed.command == "database" else parsed.command
+            st.caption(f"🗄️ Réponse générée via {mode_label}")
+            with st.spinner("Génération et exécution de la requête..."):
+                # Si l'utilisateur tape /sql, on le redirige par défaut vers SQLite
+                if parsed.command in ["sqlite", "database"]:
+                    from rag_langchain.connectors.sqlite import SQLiteConnector
+                    conn = SQLiteConnector(db_path=str(settings.sqlite_path))
+                elif parsed.command == "postgres":
+                    from rag_langchain.connectors.postgres import PostgresConnector
+                    conn = PostgresConnector(dsn=settings.pg_dsn)
+                else:
+                    from rag_langchain.connectors.mongo import MongoConnector
+                    conn = MongoConnector(uri=settings.mongo_uri, db_name=settings.mongo_db)
+
+                result = conn.answer(question, parsed.references, language)
+
+            if result.safe:
+                full_response = f"✅ Requête exécutée sur {result.source_label}."
+                if result.rows:
+                    full_response += f" {len(result.rows)} ligne(s) renvoyée(s)."
+            else:
+                full_response = f"❌ Erreur / bloqué : {result.error}"
+            st.markdown(full_response)
+            with st.expander("🗄️ Détails de la requête"):
+                st.caption(f"Source : {result.source_label}")
+                st.code(result.native_query, language="json" if "Mongo" in result.source_label else "sql")
+                if result.rows:
+                    st.dataframe(result.rows)
+
+        # ==========================================================
+        # BRANCHE 3 : ROUTAGE AUTOMATIQUE (Conversation, SQL auto, Docs)
+        # ==========================================================
+        else:
+            route = classify_question(question, history, language)
+
+            if route == "conversation":
+                st.caption("💬 Réponse basée sur l'historique")
+                stream = answer_from_history_stream(question, history, language)
+                placeholder = st.empty()
+                for chunk in stream:
+                    full_response += chunk
+                    placeholder.markdown(full_response + "▌")
+                placeholder.markdown(full_response)
+
+            elif route == "database":
+                st.caption("🗄️ Réponse générée via SQLite (auto)")
+                with st.spinner("Génération et exécution de la requête SQL..."):
+                    from rag_langchain.connectors.sqlite import SQLiteConnector
+                    conn = SQLiteConnector(db_path=str(settings.sqlite_path))
+                    result = conn.answer(question, parsed.references, language)
+
+                if result.safe:
+                    full_response = "Requête exécutée avec succès."
+                    if result.rows:
+                        st.dataframe(result.rows)
+                else:
+                    full_response = f"❌ Erreur : {result.error}"
+                st.markdown(full_response)
+                with st.expander("🗄️ Détails de la requête SQL"):
+                    st.code(result.native_query, language="sql")
+
+            else:
+                # Étape 1 : reformulation
+                with st.spinner("Reformulation de la question..."):
+                    standalone_q = condense_question(question, history, language)
+
+                if standalone_q != question:
+                    st.caption(f"🔄 Question reformulée : *{standalone_q}*")
+
+                # Étape 2 : récupération + reranking
+                with st.spinner("Recherche des passages pertinents..."):
+                    chunks = retrieve_and_rerank(standalone_q, vectorstore, source_filter=source_filter)
+
+                if not chunks:
+                    full_response = "Je n'ai trouvé aucun passage pertinent dans les documents indexés."
+                    st.markdown(full_response)
+                else:
+                    # Étape 3 : génération avec streaming
+                    stream, sources = generate_answer_stream(standalone_q, chunks, language)
+                    placeholder = st.empty()
+                    for chunk in stream:
+                        full_response += chunk
+                        placeholder.markdown(full_response + "▌")
+                    placeholder.markdown(full_response)
+
+                    if sources:
+                        cited_nums_str = re.findall(r'\[(\d+)\]', full_response)
+                        cited_nums = sorted(list(set(int(n) for n in cited_nums_str if n.isdigit())))
+                        if not cited_nums:
+                            cited_nums = list(range(1, len(sources) + 1))
+                        st.write("**📚 Sources citées**")
+                        cols = st.columns(len(cited_nums))
+                        for col, i in zip(cols, cited_nums):
+                            if 0 < i <= len(sources):
+                                with col:
+                                    with st.popover(f"[{i}]"):
+                                        st.caption(sources[i - 1])
+                                        st.write(chunks[i - 1].page_content)
+    st.session_state.messages.append(("assistant", full_response))
+    st.session_state.history_pairs.append((question, full_response))
+   

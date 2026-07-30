@@ -1,0 +1,25 @@
+# Environment
+.env
+*.pyc
+__pycache__/
+*/__pycache__/
+*/*/__pycache__/
+
+# Data
+data/
+!data/.gitkeep
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Python
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+venv/
