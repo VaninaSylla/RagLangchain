@@ -1,4 +1,3 @@
-import re
 import streamlit as st
 
 from rag_langchain.core.ingestion import index_files, get_vectorstore, get_embeddings
@@ -17,18 +16,6 @@ language = "fr"
 st.set_page_config(page_title="RAG interactif", layout="centered")
 st.title(" RAG interactif")
 st.caption("Upload de documents · Reformulation · Reranking · Multi-BD (SQLite, PG, Mongo)")
-
-@st.cache_resource
-def load_vectorstore():
-    embeddings = get_embeddings()
-    return get_vectorstore(embeddings)
-
-vectorstore = load_vectorstore()
-
-try:
-    chunk_count = vectorstore._collection.count()
-except Exception:
-    chunk_count = "?"
 
 # ------------------------------------------------------------------
 # Sidebar : upload et indexation
@@ -52,25 +39,24 @@ with st.sidebar:
         status = st.empty()
         log_lines = []
 
+        # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+        # @Function Description: Callback de progression passé à index_files().
+        # Met à jour l'affichage Streamlit en direct pendant l'indexation.
+        # ------------------------------------------------------------------------------
+        # @Parameter:
+        #                 - msg: str - Message de progression.
+        # @Returnvalue:
+        #                 - None
+        # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
         def progress(msg):
             log_lines.append(msg)
             status.text("\n".join(log_lines))
 
-        try:
-            with st.spinner("Indexation en cours..."):
-                total = index_files(saved_paths, progress_callback=progress, vectorstore=vectorstore)
-            st.success(f"✅ {total} chunks indexés.")
-            try:
-                chunk_count = vectorstore._collection.count()
-            except Exception:
-                chunk_count = "?"
-        except Exception as e:
-            st.error(f"❌ Erreur pendant l'indexation : {e}")
+        with st.spinner("Indexation en cours..."):
+            total = index_files(saved_paths, progress_callback=progress)
 
-    if chunk_count == 0:
-        st.warning("⚠️ Aucun chunk indexé pour l'instant.")
-    else:
-        st.info(f"✅ {chunk_count} chunk(s) actuellement indexé(s).")
+        st.success(f"✅ {total} chunks indexés.")
+        st.cache_resource.clear()
 
     st.divider()
     
@@ -81,7 +67,7 @@ with st.sidebar:
         st.caption(f"• {f.name}")
         
     st.divider()
-    st.header("🎯 Mode de recherche")
+    st.header(" Mode de recherche")
     mode_options = {
         "Auto (RAG)": "auto",
         "📄 Documents (RAG)": "docs",
@@ -105,6 +91,35 @@ with st.sidebar:
     # On définit 'source_filter' AVANT de l'utiliser dans le code
     source_filter = selected_docs if selected_docs else None
 
+# ------------------------------------------------------------------
+# Chargement du vectorstore (mis en cache)
+# ------------------------------------------------------------------
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# @Function Description: Ouvre la connexion à la base vectorielle Chroma,
+# mise en cache par Streamlit pour n'être recréée qu'une seule fois.
+# ------------------------------------------------------------------------------
+# @Parameter:
+#                 - (aucun)
+# @Returnvalue:
+#                 - Chroma - Instance connectée à "chroma_db/".
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+@st.cache_resource
+def load_vectorstore():
+    embeddings = get_embeddings()
+    return get_vectorstore(embeddings)
+
+vectorstore = load_vectorstore()
+
+try:
+    chunk_count = vectorstore._collection.count()
+except Exception:
+    chunk_count = "?"
+
+with st.sidebar:
+    if chunk_count == 0:
+        st.warning("⚠️ Aucun chunk indexé pour l'instant.")
+    else:
+        st.info(f"✅ {chunk_count} chunk(s) actuellement indexé(s).")
 
 # ------------------------------------------------------------------
 # État de la conversation
@@ -126,6 +141,9 @@ with st.container():
 
 if user_input:
     parsed = parse_user_input(user_input)
+    question = parsed.cleaned_question
+    if user_input:
+     parsed = parse_user_input(user_input)
     
     # Si l'utilisateur n'a pas tapé de / mais a choisi un mode dans la sidebar
     if parsed.command == "auto" and selected_mode != "auto":
@@ -187,19 +205,6 @@ if user_input:
 
                 result = conn.answer(question, parsed.references, language)
 
-            if result.safe:
-                full_response = f"✅ Requête exécutée sur {result.source_label}."
-                if result.rows:
-                    full_response += f" {len(result.rows)} ligne(s) renvoyée(s)."
-            else:
-                full_response = f"❌ Erreur / bloqué : {result.error}"
-            st.markdown(full_response)
-            with st.expander("🗄️ Détails de la requête"):
-                st.caption(f"Source : {result.source_label}")
-                st.code(result.native_query, language="json" if "Mongo" in result.source_label else "sql")
-                if result.rows:
-                    st.dataframe(result.rows)
-
         # ==========================================================
         # BRANCHE 3 : ROUTAGE AUTOMATIQUE (Conversation, SQL auto, Docs)
         # ==========================================================
@@ -257,18 +262,35 @@ if user_input:
                     placeholder.markdown(full_response)
 
                     if sources:
-                        cited_nums_str = re.findall(r'\[(\d+)\]', full_response)
-                        cited_nums = sorted(list(set(int(n) for n in cited_nums_str if n.isdigit())))
-                        if not cited_nums:
-                            cited_nums = list(range(1, len(sources) + 1))
-                        st.write("**📚 Sources citées**")
-                        cols = st.columns(len(cited_nums))
-                        for col, i in zip(cols, cited_nums):
-                            if 0 < i <= len(sources):
-                                with col:
-                                    with st.popover(f"[{i}]"):
-                                        st.caption(sources[i - 1])
-                                        st.write(chunks[i - 1].page_content)
+                     import re
+                    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+                    # @Author:        John MANGA | Digit-Tech-Innov Solutions and Services
+                    # @Creation:      20.07.2026
+                    # ------------------------------------------------------------------------------
+                    # @Function Description: Analyse la réponse générée par le LLM pour 
+                    # extraire les numéros de citations [n] effectivement utilisés, afin 
+                    # de n'afficher que les sources pertinentes dans l'interface.
+                    # ------------------------------------------------------------------------------
+                    # @Parameter:
+                    #                 - (aucun, utilise les variables locales)
+                    # @Returnvalue:
+                    #                 - None - Met à jour l'interface Streamlit.
+                    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+                    cited_nums_str = re.findall(r'\[(\d+)\]', full_response)
+                    cited_nums = sorted(list(set(int(n) for n in cited_nums_str if n.isdigit())))
+                    
+                    # Si le LLM n'a cité aucun numéro, on affiche toutes les sources par défaut
+                    if not cited_nums:
+                        cited_nums = list(range(1, len(sources) + 1))
+
+                    st.write("**📚 Sources citées**")
+                    cols = st.columns(len(cited_nums))
+                    for col, i in zip(cols, cited_nums):
+                        if 0 < i <= len(sources):
+                            with col:
+                                with st.popover(f"[{i}]"):
+                                    st.caption(sources[i - 1])
+                                    st.write(chunks[i - 1].page_content)
     st.session_state.messages.append(("assistant", full_response))
     st.session_state.history_pairs.append((question, full_response))
    
