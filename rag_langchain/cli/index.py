@@ -5,6 +5,15 @@ CLI entry point: indexes all documents from the configured data/documents/
 folder into the Chroma vector store.
 """
 
+import sys
+from pathlib import Path
+
+# Ensure the project root is on sys.path so `rag_langchain` is importable
+# even when this file is launched as a plain script (e.g. `python ingest.py`).
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
 from rag_langchain.core.ingestion import index_files
 from rag_langchain.config import settings
 

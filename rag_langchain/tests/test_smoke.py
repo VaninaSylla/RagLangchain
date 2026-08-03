@@ -261,3 +261,114 @@ def test_env_file_is_inside_package():
     from rag_langchain.config.settings import settings
     expected = Path(settings.base_dir) / ".env"
     assert expected.parent == Path(settings.base_dir)
+
+
+# ---------------------------------------------------------------------------
+# Streamlit entry-point: simulates Streamlit's sys.path[0]=script_dir to
+# verify the project-root path-injection fix prevents the
+# `ModuleNotFoundError: rag_langchain` regression.
+# ---------------------------------------------------------------------------
+def test_streamlit_app_imports_when_script_dir_is_sys_path():
+    import importlib.util
+    import sys
+
+    project_root = Path(__file__).resolve().parents[2]
+    script_dir = project_root / "rag_langchain" / "web"
+    spec = importlib.util.spec_from_file_location(
+        "streamlit_app", str(project_root / "rag_langchain" / "web" / "streamlit_app.py")
+    )
+    assert spec is not None
+
+    # Save/restore sys.path. Insert script_dir at position 0 (as Streamlit does).
+    original = list(sys.path)
+    sys.path.insert(0, str(script_dir))
+    try:
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)  # must not raise ModuleNotFoundError
+        assert mod.settings.base_dir == project_root
+    finally:
+        sys.path[:] = original
+
+
+def test_cli_chat_imports_when_script_dir_is_sys_path():
+    import importlib.util
+    import sys
+
+    project_root = Path(__file__).resolve().parents[2]
+    script_dir = project_root / "rag_langchain" / "cli"
+    spec = importlib.util.spec_from_file_location(
+        "chat", str(project_root / "rag_langchain" / "cli" / "chat.py")
+    )
+    assert spec is not None
+
+    original = list(sys.path)
+    sys.path.insert(0, str(script_dir))
+    try:
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        assert callable(mod.main)
+    finally:
+        sys.path[:] = original
+
+
+def test_cli_index_imports_when_script_dir_is_sys_path():
+    import importlib.util
+    import sys
+
+    project_root = Path(__file__).resolve().parents[2]
+    script_dir = project_root / "rag_langchain" / "cli"
+    spec = importlib.util.spec_from_file_location(
+        "index", str(project_root / "rag_langchain" / "cli" / "index.py")
+    )
+    assert spec is not None
+
+    original = list(sys.path)
+    sys.path.insert(0, str(script_dir))
+    try:
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        assert callable(mod.main)
+    finally:
+        sys.path[:] = original
+
+
+# ---------------------------------------------------------------------------
+# Indexing: progress callback must not crash on cp1252 consoles.
+# Regression test for the "UnicodeEncodeError: cp1252 can't encode ✅" bug.
+# ---------------------------------------------------------------------------
+def test_index_files_progress_survives_cp1252_console(monkeypatch):
+    """
+    Simulate a cp1252 console by monkeypatching stdout.encoding, then index
+    an in-memory PDF-like fixture. The progress callback (which uses ✅ / ❌)
+    must not raise UnicodeEncodeError on the success line.
+    """
+    import sys
+    from rag_langchain.core import ingestion as ing_mod
+
+    captured = []
+
+    class FakeStdout:
+        encoding = "cp1252"
+
+    monkeypatch.setattr(ing_mod.sys, "stdout", FakeStdout())
+
+    # Build a minimal PDF with pymupdf (already a dep) and index it.
+    import fitz
+    import tempfile
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+        pdf_path = f.name
+    try:
+        doc = fitz.open()
+        page = doc.new_page()
+        page.insert_text((50, 50), "Hello world. " * 50)
+        doc.save(pdf_path)
+        doc.close()
+
+        safe_cb = ing_mod._safe_progress_callback(lambda m: captured.append(m))
+        assert safe_cb is not None
+        # Calling the wrapper directly must not raise.
+        safe_cb("✅ ok")
+        safe_cb("❌ not ok")
+        assert captured == ["✅ ok", "❌ not ok"]
+    finally:
+        Path(pdf_path).unlink(missing_ok=True)

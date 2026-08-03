@@ -1,6 +1,9 @@
 
 import os
+import sys
+import hashlib
 from pathlib import Path
+from typing import Iterable
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter, MarkdownHeaderTextSplitter
 from langchain_ollama import OllamaEmbeddings
@@ -131,17 +134,26 @@ def get_embeddings():
     ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     @Function Description: Instancie le modèle d'embedding utilisé pour
     vectoriser les chunks de texte et les questions posées, via Ollama en
-    local (aucun appel cloud).
+    local (aucun appel cloud). On cible explicitement l'API publique
+    d'Ollama (http://localhost:11434) plutôt que de laisser la lib deviner
+    le port d'un llama-server interne qui change à chaque chargement de
+    modèle — c'est la cause principale des erreurs
+    "connectex: No connection could be made" (status 400) vues sur
+    l'endpoint /tokenize pendant l'indexation d'un PDF.
     --------------------------------------------------------------------------
     @Parameter:
         - (aucun)
 
     @Returnvalue:
         - OllamaEmbeddings - Instance configurée sur le modèle
-          EMBEDDING_MODEL ("nomic-embed-text").
+          EMBEDDING_MODEL ("nomic-embed-text") et l'URL Ollama explicite.
     ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     """
-    return OllamaEmbeddings(model=settings.embedding_model)
+    return OllamaEmbeddings(
+        model=settings.embedding_model,
+        base_url=settings.ollama_base_url,
+        client_kwargs={"timeout": 120.0},
+    )
 
 
 def get_vectorstore(embeddings=None):
@@ -164,6 +176,128 @@ def get_vectorstore(embeddings=None):
     if embeddings is None:
         embeddings = get_embeddings()
     return Chroma(persist_directory=str(settings.chroma_dir), embedding_function=embeddings)
+
+
+def _file_sha256(file_path: Path) -> str:
+    """
+    ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+    @Function Description: Calcule l'empreinte SHA-256 d'un fichier en
+    lisant par chunks de 1 MB (évite de tout charger en RAM pour un gros
+    PDF). Cette empreinte sert de clé d'identification unique pour
+    détecter une ré-indexation et purger l'ancienne version dans Chroma.
+    --------------------------------------------------------------------------
+    @Parameter:
+        - file_path: Path - Chemin vers le fichier à hacher.
+
+    @Returnvalue:
+        - str - Hex digest SHA-256 (64 caractères).
+    ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+    """
+    h = hashlib.sha256()
+    with open(file_path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def purge_by_hash(vectorstore, file_hash: str):
+    """
+    ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+    @Function Description: Supprime tous les chunks de Chroma associés à
+    une empreinte SHA-256 donnée (i.e. tous les chunks issus d'une
+    version précédente du même fichier). On utilise l'API de filtre Chroma
+    via le store, qui route vers le moteur sous-jacent (duckdb+parquet) et
+    fonctionne de la même façon que ChromaDB en mode HTTP.
+    --------------------------------------------------------------------------
+    @Parameter:
+        - vectorstore: Chroma - Instance cible.
+        - file_hash: str - Hex digest SHA-256 (metadata["source_hash"]).
+
+    @Returnvalue:
+        - int - Nombre approximatif de chunks supprimés (Chroma ne
+          retourne pas toujours le compte exact sur toutes les versions,
+          on tolère ce flou et on déduit depuis le delete si possible).
+    ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+    """
+    try:
+        # Tente de compter avant suppression (utile pour le progress log)
+        try:
+            existing = vectorstore._collection.get(where={"source_hash": file_hash})
+            removed = len(existing.get("ids", []) or [])
+        except Exception:
+            removed = 0
+        vectorstore.delete(where={"source_hash": file_hash})
+        return removed
+    except Exception:
+        return 0
+
+
+def list_indexed_sources(vectorstore):
+    """
+    ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+    @Function Description: Retourne la liste triée et dédupliquée des noms
+    de fichiers réellement indexés dans Chroma (d'après metadata["source"]).
+    C'est la source de vérité pour la sidebar Streamlit : on n'affiche
+    plus jamais un fichier du filesystem qui n'est pas dans la base,
+    et inversement. Robuste face à un Chroma verrouille (lock SQLite WAL)
+    juste après écriture : retombe sur un set vide plutôt que de lever.
+    --------------------------------------------------------------------------
+    @Parameter:
+        - vectorstore: Chroma - Instance cible.
+
+    @Returnvalue:
+        - list[str] - Noms de fichiers uniques, triés alphabétiquement.
+    ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+    """
+    try:
+        try:
+            data = vectorstore._collection.get(include=["metadatas"], limit=100000)
+            metadatas = data.get("metadatas") or []
+        except Exception:
+            return []
+
+        sources = set()
+        for m in metadatas:
+            if isinstance(m, dict):
+                src = m.get("source")
+                if isinstance(src, str) and src:
+                    sources.add(src)
+
+        return sorted(sources)
+    except Exception:
+        return []
+
+
+def _safe_progress_callback(progress_callback):
+    """
+    ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+    @Function Description: Wrap a progress callback so that non-UTF-8 consoles
+    (Windows cp1252 PowerShell) don't crash on the ✅ / ❌ emojis. Streamlit's
+    own `st.text` already accepts Unicode and bypasses this wrapper; the
+    shim only affects callbacks whose output is a real terminal/pipe.
+    # ------------------------------------------------------------------------------
+    # @Parameter:
+    #                 - progress_callback: Callable[[str], None] - Original callback.
+    # @Returnvalue:
+    #                 - Callable[[str], None] - Safe variant that drops/replaces
+    #                   characters the current stdout codec can't encode.
+    ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+    """
+    if progress_callback is None:
+        return None
+
+    def safe_cb(message: str) -> None:
+        try:
+            progress_callback(message)
+        except UnicodeEncodeError:
+            encoding = (getattr(sys.stdout, "encoding", None) or "ascii").lower()
+            replacement = "?" if encoding.startswith("ascii") else ""
+            sanitized = message.encode(encoding, errors="replace").decode(encoding, errors="replace")
+            if replacement:
+                sanitized = sanitized.replace("\u2705", "[OK]").replace("\u274c", "[ERR]")
+            progress_callback(sanitized)
+
+    return safe_cb
 
 
 def index_files(file_paths, progress_callback=None, vectorstore=None):
@@ -192,20 +326,43 @@ def index_files(file_paths, progress_callback=None, vectorstore=None):
         embeddings = get_embeddings()
         vectorstore = get_vectorstore(embeddings)
 
+    safe_progress = _safe_progress_callback(progress_callback)
+
     total_chunks = 0
     for file_path in file_paths:
         file_path = Path(file_path)
         try:
-            if progress_callback:
-                progress_callback(f"Chargement de {file_path.name}...")
+            if safe_progress:
+                safe_progress(f"Chargement de {file_path.name}...")
+
+            # Calcule l'empreinte du fichier pour la dédup. On le fait
+            # avant le split : un fichier identique (même contenu, même
+            # nom) sera détecté et remplacé, pas dupliqué.
+            try:
+                file_hash = _file_sha256(file_path)
+            except Exception as e:
+                if safe_progress:
+                    safe_progress(f"❌ Erreur sur {file_path.name} : {e}")
+                continue
+
             raw_docs = load_single_file(file_path)
             chunks = split_documents(raw_docs)
+
+            # Tag chaque chunk avec le hash AVANT écriture, puis purge
+            # toute ancienne version portant ce même hash. Conséquence :
+            # réindexer un PDF ne crée aucun doublon, ça remplace.
+            for chunk in chunks:
+                chunk.metadata["source_hash"] = file_hash
+
+            removed = purge_by_hash(vectorstore, file_hash)
+
             vectorstore.add_documents(chunks)
             total_chunks += len(chunks)
-            if progress_callback:
-                progress_callback(f"✅ {file_path.name} indexé ({len(chunks)} chunks)")
+            extra = f" (remplace {removed} ancien(s) chunk(s))" if removed else ""
+            if safe_progress:
+                safe_progress(f"✅ {file_path.name} indexé ({len(chunks)} chunks){extra}")
         except Exception as e:
-            if progress_callback:
-                progress_callback(f"❌ Erreur sur {file_path.name} : {e}")
+            if safe_progress:
+                safe_progress(f"❌ Erreur sur {file_path.name} : {e}")
 
     return total_chunks

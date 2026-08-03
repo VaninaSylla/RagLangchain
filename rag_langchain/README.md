@@ -13,7 +13,7 @@
 
 ## Installation
 
-```powershell
+```bash
 pip uninstall faiss-cpu -y
 pip install -r requirements.txt
 ```
@@ -25,7 +25,7 @@ une connexion internet la première fois, ensuite il est mis en cache localement
 ## Utilisation
 
 ### Interface web (recommandée — upload inclus)
-```powershell
+```bash
 streamlit run app_streamlit.py
 ```
 1. Dans la barre latérale, dépose tes fichiers PDF/TXT/DOCX
@@ -33,7 +33,7 @@ streamlit run app_streamlit.py
 3. Pose tes questions dans le chat — chaque réponse affiche ses sources avec numéro de page
 
 ### Ligne de commande (sans upload, lit `documents/`)
-```powershell
+```bash
 python ingest.py       # indexe une fois
 python rag_app.py       # puis pose tes questions
 ```

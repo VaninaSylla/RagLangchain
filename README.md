@@ -157,7 +157,7 @@ RagLangchain/
 ├── app_streamlit.py               # Shims (alias)
 ├── ingest.py
 ├── rag_app.py
-├── tasks.ps1 / Makefile           # Raccourcis
+├── tasks.sh / Makefile            # Raccourcis (bash / Git-Bash)
 ├── requirements.txt
 └── README.md
 ```
@@ -332,16 +332,21 @@ flowchart LR
 
 ### Étape 1 — Préparer l'environnement
 
-```powershell
+```bash
 cd C:\Users\ngono\Desktop\RagLangchain
 python -m venv venv
-.\venv\Scripts\Activate.ps1
+
+# Git-Bash (Windows)
+source venv/Scripts/activate
+# Linux / macOS
+# source venv/bin/activate
+
 pip install -r requirements.txt
 ```
 
 ### Étape 2 — Ollama (obligatoire)
 
-```powershell
+```bash
 ollama serve
 ollama pull nomic-embed-text
 ollama pull qwen3-4b
@@ -349,7 +354,7 @@ ollama pull qwen3-4b
 
 ### Étape 3 — Bases de données (optionnel)
 
-```powershell
+```bash
 # SQLite (local, aucune installation requise)
 python -m rag_langchain.scripts.init_sqlite_employees
 
@@ -366,7 +371,7 @@ python -m rag_langchain.scripts.init_mongo_services
 
 Placer des fichiers dans `data/documents/` puis :
 
-```powershell
+```bash
 python -m rag_langchain.cli.index
 ```
 
@@ -421,21 +426,23 @@ STREAMLIT_ADDRESS=0.0.0.0
 
 ### Raccourcis (recommandé)
 
-```powershell
-.\tasks.ps1 install      # pip install -r requirements.txt
-.\tasks.ps1 init-sqlite  # seed SQLite
-.\tasks.ps1 init-pg      # seed PostgreSQL
-.\tasks.ps1 init-mongo   # seed MongoDB
-.\tasks.ps1 index        # indexation des documents
-.\tasks.ps1 chat         # CLI chat
-.\tasks.ps1 web          # Streamlit
-.\tasks.ps1 test         # pytest
-.\tasks.ps1 clean        # supprime __pycache__
+```bash
+./tasks.sh install      # pip install -r requirements.txt
+./tasks.sh init-sqlite  # seed SQLite
+./tasks.sh init-pg      # seed PostgreSQL
+./tasks.sh init-mongo   # seed MongoDB
+./tasks.sh index        # indexation des documents
+./tasks.sh chat         # CLI chat
+./tasks.sh web          # Streamlit
+./tasks.sh test         # pytest
+./tasks.sh clean        # supprime __pycache__
 ```
+
+> Alternative sous Linux/macOS : `make install`, `make web`, etc.
 
 ### Commandes `python -m`
 
-```powershell
+```bash
 # Indexation
 python -m rag_langchain.cli.index
 
@@ -475,8 +482,8 @@ Question > /docs @doc:chapter 4_ chemical bonding.pdf parle des liaisons ?
 
 ## Tests
 
-```powershell
-.\tasks.ps1 test
+```bash
+./tasks.sh test
 # ou
 pytest -q
 ```

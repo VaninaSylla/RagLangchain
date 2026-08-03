@@ -1,6 +1,18 @@
+import sys
+from pathlib import Path
+
+# Streamlit sets sys.path[0] to the script's directory (rag_langchain/web/),
+# so the package 'rag_langchain' itself is not importable from there.
+# Prepending the project root to sys.path makes `import rag_langchain` work
+# whether the app is launched via `streamlit run …`, `python app_streamlit.py`,
+# or any other entry point that doesn't change cwd.
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
 import streamlit as st
 
-from rag_langchain.core.ingestion import index_files, get_vectorstore, get_embeddings
+from rag_langchain.core.ingestion import index_files, get_vectorstore, get_embeddings, list_indexed_sources
 from rag_langchain.core.rag_chain import (
     condense_question, retrieve_and_rerank, generate_answer_stream,
     classify_question, answer_from_history_stream,
@@ -18,6 +30,50 @@ st.title(" RAG interactif")
 st.caption("Upload de documents · Reformulation · Reranking · Multi-BD (SQLite, PG, Mongo)")
 
 # ------------------------------------------------------------------
+# Chargement du vectorstore (mis en cache)
+# ------------------------------------------------------------------
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# @Function Description: Ouvre la connexion à la base vectorielle Chroma,
+# mise en cache par Streamlit pour n'être recréée qu'une seule fois.
+# ------------------------------------------------------------------------------
+# @Parameter:
+#                 - (aucun)
+# @Returnvalue:
+#                 - Chroma - Instance connectée à "chroma_db/".
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+@st.cache_resource
+def load_vectorstore():
+    embeddings = get_embeddings()
+    return get_vectorstore(embeddings)
+
+vectorstore = load_vectorstore()
+
+
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# @Function Description: Liste les fichiers du dossier d'upload en
+# excluant les placeholders Git (.gitkeep) et les fichiers temporaires
+# Office (~$document.docx). Utilisé uniquement en fallback quand la base
+# Chroma est encore vide (avant tout indexage), pour proposer à
+# l'utilisateur les fichiers qu'il pourrait indexer depuis le disque.
+# ------------------------------------------------------------------------------
+# @Parameter:
+#                 - (aucun)
+# @Returnvalue:
+#                 - list[Path] - Chemins de fichiers éligibles, triés.
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+def list_filesystem_documents():
+    def _eligible(p: Path) -> bool:
+        name = p.name
+        if name == ".gitkeep":
+            return False
+        if name.startswith("~$"):
+            return False
+        return p.is_file()
+
+    return sorted(p for p in UPLOAD_DIR.glob("*") if _eligible(p))
+
+
+# ------------------------------------------------------------------
 # Sidebar : upload et indexation
 # ------------------------------------------------------------------
 with st.sidebar:
@@ -26,9 +82,10 @@ with st.sidebar:
         "Ajoute tes documents (PDF, TXT, DOCX, PPTX)",
         type=["pdf", "txt", "docx", "pptx", "ppt"],
         accept_multiple_files=True,
+        key="doc_uploader",
     )
 
-    if uploaded_files and st.button("Indexer les documents"):
+    if uploaded_files and st.button("Indexer les documents", key="index_btn"):
         saved_paths = []
         for uf in uploaded_files:
             dest = UPLOAD_DIR / uf.name
@@ -52,20 +109,43 @@ with st.sidebar:
             log_lines.append(msg)
             status.text("\n".join(log_lines))
 
-        with st.spinner("Indexation en cours..."):
-            total = index_files(saved_paths, progress_callback=progress)
-
-        st.success(f"✅ {total} chunks indexés.")
-        st.cache_resource.clear()
+        # On capture toute exception pour qu'elle s'affiche dans l'UI au
+        # lieu de faire s'évanouir l'interface (Streamlit rerun et cache
+        # le traceback derrière un écran vide si l'exception n'est pas
+        # attrapée dans le callback bouton).
+        try:
+            with st.spinner("Indexation en cours..."):
+                total = index_files(saved_paths, progress_callback=progress, vectorstore=vectorstore)
+        except Exception as e:
+            st.error(f"❌ Erreur d'indexation : {type(e).__name__} : {e}")
+            import traceback
+            with st.expander("Traceback complet"):
+                st.code(traceback.format_exc())
+        else:
+            st.success(f"✅ {total} chunks indexés.")
+            # Invalide le cache de Chroma pour que les prochains reads voient
+            # les nouveaux chunks, SANS forcer un rerun de l'UI (le rerun
+            # naturel qui suit la fin du bouton suffit).
+            load_vectorstore.clear()
 
     st.divider()
-    
-    # On définit 'existing' AVANT de l'utiliser dans le multiselect
-    existing = list(UPLOAD_DIR.glob("*"))
-    st.caption(f"📄 {len(existing)} document(s) déjà indexé(s) au total")
-    for f in existing:
-        st.caption(f"• {f.name}")
-        
+
+    # Source de vérité : Chroma. On ne lit le filesystem qu'en fallback
+    # (collection vide avant tout indexage). On la mémorise dans
+    # session_state pour stabiliser le multiselect entre les reruns.
+    indexed_in_chroma = list_indexed_sources(vectorstore)
+    if indexed_in_chroma:
+        doc_list = indexed_in_chroma
+        list_source = "Chroma"
+    else:
+        fs_docs = list_filesystem_documents()
+        doc_list = [p.name for p in fs_docs]
+        list_source = "dossier"
+
+    st.caption(f"📄 {len(doc_list)} document(s) indexé(s) — source : {list_source}")
+    for name in doc_list:
+        st.caption(f"• {name}")
+
     st.divider()
     st.header(" Mode de recherche")
     mode_options = {
@@ -79,36 +159,19 @@ with st.sidebar:
     selected_mode = st.selectbox(
         "Choisis la source de données :",
         list(mode_options.keys()),
-        index=0
+        index=0,
+        key="mode_select",
     )
 
     st.divider()
     st.header("Filtrer la recherche")
     selected_docs = st.multiselect(
         "Chercher uniquement dans (vide = tous) :",
-        options=sorted(f.name for f in existing),
+        options=doc_list,
+        key="doc_filter",
     )
     # On définit 'source_filter' AVANT de l'utiliser dans le code
     source_filter = selected_docs if selected_docs else None
-
-# ------------------------------------------------------------------
-# Chargement du vectorstore (mis en cache)
-# ------------------------------------------------------------------
-# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-# @Function Description: Ouvre la connexion à la base vectorielle Chroma,
-# mise en cache par Streamlit pour n'être recréée qu'une seule fois.
-# ------------------------------------------------------------------------------
-# @Parameter:
-#                 - (aucun)
-# @Returnvalue:
-#                 - Chroma - Instance connectée à "chroma_db/".
-# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-@st.cache_resource
-def load_vectorstore():
-    embeddings = get_embeddings()
-    return get_vectorstore(embeddings)
-
-vectorstore = load_vectorstore()
 
 try:
     chunk_count = vectorstore._collection.count()

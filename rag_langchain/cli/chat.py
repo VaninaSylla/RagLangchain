@@ -5,6 +5,15 @@ CLI interactive RAG chat: conversation memory, question reformulation,
 reranking, and citations with source + page number.
 """
 
+import sys
+from pathlib import Path
+
+# Ensure the project root is on sys.path so `rag_langchain` is importable
+# even when this file is launched as a plain script (e.g. `python rag_app.py`).
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
 from rag_langchain.core.ingestion import get_vectorstore
 from rag_langchain.core.rag_chain import answer_question
 from rag_langchain.core.command_parser import parse_user_input

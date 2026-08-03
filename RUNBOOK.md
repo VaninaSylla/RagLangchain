@@ -1,7 +1,9 @@
 # RUNBOOK — Guide pas-à-pas pour lancer le projet
 
 > **Public** : toute personne qui veut faire tourner `RagLangchain` sur sa machine
-> Windows pour la première fois, sans se perdre dans les détails.
+> pour la première fois, sans se perdre dans les détails. Les commandes sont données
+> pour **Git-Bash (Windows)** et **Linux/macOS** — adaptez le chemin du venv
+> (`venv/Scripts/` vs `venv/bin/`).
 >
 > **Temps estimé** : 30 à 60 minutes (dont la majorité pour installer PostgreSQL et MongoDB si besoin).
 
@@ -47,7 +49,7 @@ flowchart LR
 | Outil | Version | Pourquoi | Vérification |
 |-------|---------|----------|--------------|
 | **Python** | ≥ 3.10 | Runtime | `python --version` |
-| **PowerShell** | 5.1+ | Shell par défaut Windows | `$PSVersionTable.PSVersion` |
+| **Shell** | — | Git-Bash (Windows) ou bash/zsh (Linux/macOS) | `bash --version` |
 | **Ollama** | dernière | Moteur LLM + embeddings | `ollama --version` |
 | **PostgreSQL** *(optionnel)* | 13+ | Base `purchases_db` | `psql --version` |
 | **MongoDB** *(optionnel)* | 6+ | Base `services_db` | `mongod --version` |
@@ -61,32 +63,30 @@ flowchart LR
 
 ### 1.1 Vérifier Python
 
-```powershell
+```bash
 python --version
 # Doit afficher Python 3.10 ou supérieur
 ```
 
-Si absent, télécharger depuis [python.org](https://www.python.org/downloads/) (cocher **Add Python to PATH**).
+Si absent, télécharger depuis [python.org](https://www.python.org/downloads/) (cocher **Add Python to PATH** sous Windows).
 
-### 1.2 Activer PowerShell pour les scripts
+### 1.2 Créer l'environnement virtuel
 
-```powershell
-Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
-```
-
-### 1.3 Créer l'environnement virtuel
-
-```powershell
+```bash
 cd C:\Users\ngono\Desktop\RagLangchain
 python -m venv venv
-.\venv\Scripts\Activate.ps1
+
+# Git-Bash (Windows)
+source venv/Scripts/activate
+# Linux / macOS
+# source venv/bin/activate
 ```
 
 > Votre prompt doit maintenant commencer par `(venv)`.
 
-### 1.4 Mettre pip à jour
+### 1.3 Mettre pip à jour
 
-```powershell
+```bash
 python -m pip install --upgrade pip
 ```
 
@@ -94,7 +94,7 @@ python -m pip install --upgrade pip
 
 ## Étape 2 — Dépendances Python
 
-```powershell
+```bash
 pip install -r requirements.txt
 ```
 
@@ -102,8 +102,8 @@ La première installation prend 2 à 5 minutes (téléchargement de torch, trans
 
 ### Alternative — raccourci
 
-```powershell
-.\tasks.ps1 install
+```bash
+./tasks.sh install
 ```
 
 ---
@@ -118,7 +118,7 @@ Télécharger depuis [ollama.com/download](https://ollama.com/download) et lance
 
 Ollama démarre automatiquement avec l'installateur. Si ce n'est pas le cas :
 
-```powershell
+```bash
 ollama serve
 ```
 
@@ -126,14 +126,14 @@ ollama serve
 
 Dans **un autre terminal** :
 
-```powershell
+```bash
 ollama pull nomic-embed-text    # ~274 Mo — embeddings
 ollama pull qwen3-4b            # ~2.5 Go — génération
 ```
 
 ### 3.4 Vérifier
 
-```powershell
+```bash
 ollama list
 # Doit afficher nomic-embed-text et qwen3-4b
 ```
@@ -152,10 +152,12 @@ flowchart LR
 
 ### 4.1 Ouvrir le fichier
 
-```powershell
-code rag_langchain\.env
+```bash
+code rag_langchain/.env
 # ou
-notepad rag_langchain\.env
+nano rag_langchain/.env          # Linux/macOS
+# ou
+notepad rag_langchain\.env       # Windows
 ```
 
 ### 4.2 Adapter les valeurs critiques
@@ -177,7 +179,7 @@ EMBEDDING_MODEL=nomic-embed-text
 
 ### 4.3 Vérifier la résolution
 
-```powershell
+```bash
 python -c "from rag_langchain.config import settings; print(settings.sqlite_path)"
 # Doit afficher : C:\Users\ngono\Desktop\RagLangchain\data\sqlite\employees.db
 ```
@@ -206,7 +208,7 @@ flowchart TD
 
 ### 5.1 SQLite — **(obligatoire, déjà inclus)**
 
-```powershell
+```bash
 python -m rag_langchain.scripts.init_sqlite_employees
 # Affiche : SQLite database created at '…\data\sqlite\employees.db' with 5 employees.
 ```
@@ -217,22 +219,22 @@ python -m rag_langchain.scripts.init_sqlite_employees
 
 #### Installation
 
-1. Télécharger depuis [postgresql.org/download/windows](https://www.postgresql.org/download/windows/)
+1. Télécharger depuis [postgresql.org/download/windows](https://www.postgresql.org/download/windows/) (Windows) ou via le gestionnaire de paquets (`sudo apt install postgresql` sur Ubuntu, `brew install postgresql` sur macOS)
 2. Pendant l'installation :
    - Mémoriser le **mot de passe** saisi pour l'utilisateur `postgres`
    - Port par défaut : `5432`
-3. Démarrer le service : `services.msc` → service « postgresql-x64-XX » → Démarrer
+3. Démarrer le service : `services.msc` → service « postgresql-x64-XX » → Démarrer (Windows)
 
 #### Vérification
 
-```powershell
+```bash
 # Vérifier que le port répond
-Test-NetConnection -ComputerName localhost -Port 5432
+curl -s telnet://localhost:5432 || echo "port 5432 fermé"
 ```
 
 #### Seed
 
-```powershell
+```bash
 python -m rag_langchain.scripts.init_postgres_purchases
 # Affiche : Database 'purchases_db' created / Table 'achats' created and filled ...
 ```
@@ -245,27 +247,27 @@ python -m rag_langchain.scripts.init_postgres_purchases
 
 1. Télécharger depuis [mongodb.com/try/download/community](https://www.mongodb.com/try/download/community)
 2. Choisir une installation **complète** (inclut `mongod`)
-3. Démarrer le service : `services.msc` → service « MongoDB Server » → Démarrer
+3. Démarrer le service : `services.msc` → service « MongoDB Server » → Démarrer (Windows)
 
 #### Vérification
 
-```powershell
-Test-NetConnection -ComputerName localhost -Port 27017
+```bash
+curl -s telnet://localhost:27017 || echo "port 27017 fermé"
 ```
 
 #### Seed
 
-```powershell
+```bash
 python -m rag_langchain.scripts.init_mongo_services
 # Affiche : MongoDB database 'services_db' created with 4 services.
 ```
 
 ### 5.4 Raccourci
 
-```powershell
-.\tasks.ps1 init-sqlite
-.\tasks.ps1 init-pg
-.\tasks.ps1 init-mongo
+```bash
+./tasks.sh init-sqlite
+./tasks.sh init-pg
+./tasks.sh init-mongo
 ```
 
 ---
@@ -276,14 +278,14 @@ python -m rag_langchain.scripts.init_mongo_services
 
 Mettre des fichiers dans `data/documents/` (formats acceptés : `.pdf`, `.txt`, `.docx`, `.pptx`, `.ppt`).
 
-```powershell
+```bash
 # Exemple : copier un PDF
-Copy-Item "C:\Users\Moi\Downloads\rapport.pdf" "data\documents\"
+cp "C:/Users/Moi/Downloads/rapport.pdf" data/documents/
 ```
 
 ### 6.2 Indexer
 
-```powershell
+```bash
 python -m rag_langchain.cli.index
 # Affiche : N file(s) found. Indexing in progress...
 #          ✅ fichier.pdf indexé (X chunks)
@@ -294,7 +296,7 @@ python -m rag_langchain.cli.index
 
 ### 6.3 Lancer le chat
 
-```powershell
+```bash
 python -m rag_langchain.cli.chat
 ```
 
@@ -309,7 +311,7 @@ Question > _
 
 ### 6.4 Lancer Streamlit (optionnel)
 
-```powershell
+```bash
 streamlit run rag_langchain/web/streamlit_app.py
 ```
 
@@ -377,13 +379,13 @@ Question > exit
 
 ### Checklist rapide
 
-```powershell
+```bash
 # 1. Tout est-il installé ?
 python --version
 ollama --version
 
 # 2. Ollama tourne-t-il ?
-Test-NetConnection -ComputerName localhost -Port 11434
+curl -s telnet://localhost:11434 || echo "port 11434 fermé"
 
 # 3. Les modèles sont-ils là ?
 ollama list
@@ -392,21 +394,21 @@ ollama list
 # (Le prompt doit commencer par (venv))
 
 # 5. Les bases existent-elles ?
-Test-Path "data\sqlite\employees.db"
+test -f data/sqlite/employees.db
 
 # 6. Les documents sont-ils indexés ?
-Test-Path "data\chroma_db\chroma.sqlite3"
+test -f data/chroma_db/chroma.sqlite3
 ```
 
 ### Réinitialiser complètement
 
-```powershell
+```bash
 # 1. Supprimer la base vectorielle
-Remove-Item -Recurse -Force data\chroma_db
-New-Item -ItemType File -Path data\chroma_db\.gitkeep -Force
+rm -rf data/chroma_db
+touch data/chroma_db/.gitkeep
 
 # 2. Supprimer la base SQLite
-Remove-Item -Force data\sqlite\employees.db
+rm -f data/sqlite/employees.db
 
 # 3. Re-seeder
 python -m rag_langchain.scripts.init_sqlite_employees
@@ -415,12 +417,12 @@ python -m rag_langchain.cli.index
 
 ### Logs utiles
 
-```powershell
+```bash
 # Streamlit affiche tout en clair
 streamlit run rag_langchain/web/streamlit_app.py
 
 # CLI : activer le mode debug
-$env:LOG_LEVEL = "DEBUG"
+export LOG_LEVEL="DEBUG"
 python -m rag_langchain.cli.chat
 ```
 
@@ -430,15 +432,15 @@ python -m rag_langchain.cli.chat
 
 ### Mettre à jour les dépendances
 
-```powershell
+```bash
 pip install --upgrade -r requirements.txt
 ```
 
 ### Ajouter un document
 
-```powershell
+```bash
 # 1. Copier le fichier
-Copy-Item "nouveau.pdf" "data\documents\"
+cp "nouveau.pdf" data/documents/
 
 # 2. Réindexer
 python -m rag_langchain.cli.index
@@ -446,30 +448,31 @@ python -m rag_langchain.cli.index
 
 ### Réindexer depuis zéro
 
-```powershell
-Remove-Item -Recurse -Force data\chroma_db
-New-Item -ItemType File -Path data\chroma_db\.gitkeep -Force
+```bash
+rm -rf data/chroma_db
+touch data/chroma_db/.gitkeep
 python -m rag_langchain.cli.index
 ```
 
 ### Lancer les tests
 
-```powershell
-.\tasks.ps1 test
+```bash
+./tasks.sh test
 # ou
 pytest -q
 ```
 
 ### Nettoyer les caches Python
 
-```powershell
-.\tasks.ps1 clean
+```bash
+./tasks.sh clean
 ```
 
 ### Mettre à jour Ollama
 
-```powershell
+```bash
 # Windows : réinstaller depuis ollama.com
+# Linux/macOS : réinstaller depuis le site officiel
 # Puis mettre à jour les modèles :
 ollama pull nomic-embed-text
 ollama pull qwen3-4b
@@ -479,11 +482,11 @@ ollama pull qwen3-4b
 
 ## Résumé express (TL;DR)
 
-```powershell
+```bash
 # Setup
 cd C:\Users\ngono\Desktop\RagLangchain
 python -m venv venv
-.\venv\Scripts\Activate.ps1
+source venv/Scripts/activate      # Git-Bash (Windows) — sinon : venv/bin/activate (Linux/macOS)
 pip install -r requirements.txt
 
 # Ollama
@@ -495,7 +498,7 @@ ollama pull qwen3-4b
 python -m rag_langchain.scripts.init_sqlite_employees
 
 # Documents
-Copy-Item "mon.pdf" "data\documents\"
+cp "mon.pdf" data/documents/
 
 # Lancer
 python -m rag_langchain.cli.index
