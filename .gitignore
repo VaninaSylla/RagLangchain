@@ -12,6 +12,11 @@ data/sqlite/*
 !data/sqlite/.gitkeep
 data/chroma_db/*
 !data/chroma_db/.gitkeep
+data/connectors.db
+data/snapshots/*
+!data/snapshots/.gitkeep
+data/memory_chroma/*
+!data/memory_chroma/.gitkeep
 
 # Secrets / local config
 .env
@@ -24,3 +29,6 @@ Thumbs.db
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Generated reports / binary deliverables (kept locally, out of source control)
+reports/

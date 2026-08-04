@@ -32,7 +32,7 @@ chat:
 	python -m rag_langchain.cli.chat
 
 web:
-	streamlit run rag_langchain/web/streamlit_app.py
+	streamlit run app_streamlit.py
 
 test:
 	pytest -q

@@ -24,7 +24,15 @@ dependencies = [
     "python-dotenv",
     "psycopg2-binary",
     "pymongo",
+    "pymysql>=1.1.0",
+    "pyodbc>=5.0.0",
+    "langgraph>=0.2.0",
 ]
 
 [tool.setuptools.packages.find]
 where = ["."]
+
+[tool.pytest.ini_options]
+markers = [
+    "auto_trigger: tests covering the auto-investigate orchestration scenario",
+]

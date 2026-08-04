@@ -18,7 +18,7 @@ case "$TASK" in
     init-mongo)  run python -m rag_langchain.scripts.init_mongo_services ;;
     index)       run python -m rag_langchain.cli.index ;;
     chat)        run python -m rag_langchain.cli.chat ;;
-    web)         run streamlit run rag_langchain/web/streamlit_app.py ;;
+    web)         run streamlit run app_streamlit.py ;;
     test)        run pytest -q ;;
     clean)
         find . -type d -name "__pycache__" -exec rm -rf {} +
