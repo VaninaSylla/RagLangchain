@@ -1,0 +1,55 @@
+"""Page 3 — Mémoire globale.
+
+- Liste des conversations
+- Recherche full-text (récents)
+- Recherche sémantique
+- Détail d'une conversation
+"""
+from __future__ import annotations
+
+import streamlit as st
+
+from rag_langchain.memory import MemoryStore
+
+
+st.title("🧠 Mémoire globale")
+
+memory = MemoryStore()
+
+convs = memory.list_conversations()
+if not convs:
+    st.info("Aucune conversation enregistrée.")
+    st.stop()
+
+# Sélecteur de conversation
+options = [f"{c.title} ({c.message_count} msg, {c.id[:8]})" for c in convs]
+idx = st.selectbox("Conversation", range(len(options)),
+                   format_func=lambda i: options[i])
+selected = convs[idx]
+st.caption(f"Démarrée le {selected.started_at}, dernière activité {selected.last_activity}")
+
+st.divider()
+
+# Recherche sémantique dans la conversation
+st.subheader("Recherche sémantique dans cette conversation")
+query = st.text_input("Question de recherche…", key="sem_search")
+if query:
+    results = memory.semantic_search(query, k=5, conversation_id=selected.id)
+    for msg, _ in results:
+        with st.chat_message(msg.role):
+            st.markdown(msg.content)
+            if msg.route:
+                st.caption(f"_route_: `{msg.route}`")
+
+st.divider()
+
+# Historique récent
+st.subheader("Historique récent")
+for m in memory.get_recent(selected.id, limit=50):
+    with st.chat_message(m.role):
+        st.markdown(m.content)
+        if m.route:
+            st.caption(f"_route_: `{msg.route if False else m.route}` · {m.timestamp:.0f}")
+        if m.sources:
+            with st.expander(f"Sources ({len(m.sources)})"):
+                st.json(m.sources)

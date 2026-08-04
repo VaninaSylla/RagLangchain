@@ -1,14 +1,14 @@
 """Construction du StateGraph LangGraph multi-agents.
 
 Flux :
-    START → parse → router → (conditional)
+    START → parse → memory → router → (conditional)
         - conversation         → synthesis → END
         - documents            → doc_agent  → synthesis → END
         - database             → db_agent   → synthesis → END
         - mixed                → planner    → doc_agent → synthesis → END
-                                                ↘ db_agent ↗
+                                                    ↘ db_agent ↗
         - auto_investigate     → planner    → doc_agent → synthesis → END
-                                                ↘ db_agent ↗
+                                                    ↘ db_agent ↗
         - unknown              → synthesis (no_info) → END
 """
 from __future__ import annotations
@@ -17,6 +17,7 @@ from langgraph.graph import StateGraph, START, END
 
 from .state import AgentState
 from .nodes.parse_node import parse_node
+from .nodes.memory_agent_node import memory_agent_node
 from .nodes.router_node import router_node
 from .nodes.planner_node import planner_node
 from .nodes.doc_agent_node import doc_agent_node
@@ -32,6 +33,7 @@ def build_graph():
     g = StateGraph(AgentState)
 
     g.add_node("parse", parse_node)
+    g.add_node("memory", memory_agent_node)
     g.add_node("router", router_node)
     g.add_node("planner", planner_node)
     g.add_node("doc_agent", doc_agent_node)
@@ -39,7 +41,8 @@ def build_graph():
     g.add_node("synthesis", synthesis_node)
 
     g.add_edge(START, "parse")
-    g.add_edge("parse", "router")
+    g.add_edge("parse", "memory")
+    g.add_edge("memory", "router")
 
     g.add_conditional_edges(
         "router",
@@ -63,7 +66,7 @@ def build_graph():
 
 
 def run_question(question: str, *, history: list | None = None,
-                 conversation_id: str = "") -> dict:
+                 conversation_id: str = "", source_filter: list[str] | None = None) -> dict:
     """Exécute le graph sur une question et retourne l'état final."""
     graph = build_graph()
     init: AgentState = {
@@ -75,7 +78,7 @@ def run_question(question: str, *, history: list | None = None,
         "references": {},
         "route": "unknown",
         "selected_connectors": [],
-        "selected_doc_filters": [],
+        "selected_doc_filters": source_filter or [],
         "doc_results": [],
         "db_results": [],
         "answer": "",
