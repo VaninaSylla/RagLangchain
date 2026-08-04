@@ -30,7 +30,8 @@ def get_reranker():
     #                 - (aucun)
     # @Returnvalue:
     #                 - CrossEncoder - Instance du modèle RERANK_MODEL, prête à
-    #                   noter des paires (question, chunk).
+    #                   noter des paires (question, chunk). Si sentence-transformers
+    #                   n'est pas installé, retourne None (fallback sans rerank).
     ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     """
     global _reranker
@@ -38,12 +39,17 @@ def get_reranker():
         # Import différé : sentence-transformers entraîne le chargement de torch/transformers,
         # plusieurs secondes. On ne paie ce coût qu'à la première question posée, pas au
         # démarrage de l'application (ce qui accélère nettement l'ouverture de Streamlit).
-        import os
-        # Mode hors-ligne : évite que Hugging Face revérifie en ligne s'il y a une mise à jour
-        # à chaque lancement (peut traîner sur une connexion lente ou instable).
-        os.environ.setdefault("HF_HUB_OFFLINE", "1")
-        from sentence_transformers import CrossEncoder
-        _reranker = CrossEncoder(settings.rerank_model)
+        try:
+            import os
+            # Mode hors-ligne : évite que Hugging Face revérifie en ligne s'il y a une mise à jour
+            # à chaque lancement (peut traîner sur une connexion lente ou instable).
+            os.environ.setdefault("HF_HUB_OFFLINE", "1")
+            from sentence_transformers import CrossEncoder
+            _reranker = CrossEncoder(settings.rerank_model)
+        except Exception:
+            # sentence-transformers non installé ou modèle indisponible → on continue
+            # sans rerank plutôt que de faire planter le pipeline RAG.
+            _reranker = None
     return _reranker
 
 
@@ -463,6 +469,10 @@ def retrieve_and_rerank(query: str, vectorstore, k_final: int = settings.final_k
             return []
 
     reranker = get_reranker()
+    if reranker is None:
+        # Pas de reranker dispo → on garde les top-k_final retournés par Chroma (déjà triés).
+        return candidates[:k_final]
+
     pairs = [(query, doc.page_content) for doc in candidates]
     scores = reranker.predict(pairs)
 
